@@ -15,7 +15,7 @@ COPY cmd/ cmd/
 COPY internal/ internal/
 
 # Build the Go app with CGO disabled to ensure a statically linked binary
-RUN go mod tidy
+RUN go mod download
 RUN CGO_ENABLED=0 GOOS=linux go build -o aegisproxy aegisproxy.io/aegis-proxy/cmd/aegisproxy
 
 # Start a new stage from scratch
