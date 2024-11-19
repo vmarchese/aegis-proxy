@@ -6,7 +6,6 @@ import (
 	"net/http"
 	"net/http/httputil"
 
-	"github.com/google/uuid"
 	"github.com/rs/zerolog/log"
 )
 
@@ -21,13 +20,13 @@ type ProxyServer struct {
 	outServer *http.Server
 }
 
-func New(inPort, outPort, proxyType string, tokenPath string) *ProxyServer {
+func New(proxyuid, inPort, outPort, proxyType string, tokenPath string) *ProxyServer {
 	p := &ProxyServer{
 		InPort:    inPort,
 		OutPort:   outPort,
 		Type:      proxyType,
 		TokenPath: tokenPath,
-		uuid:      uuid.New().String(),
+		uuid:      proxyuid,
 	}
 	p.inServer = &http.Server{Addr: fmt.Sprintf(":%s", p.InPort), Handler: http.HandlerFunc(p.proxyHandler)}
 	p.outServer = &http.Server{Addr: fmt.Sprintf(":%s", p.OutPort), Handler: http.HandlerFunc(p.proxyHandler)}

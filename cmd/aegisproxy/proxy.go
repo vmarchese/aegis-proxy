@@ -8,6 +8,7 @@ import (
 	"syscall"
 
 	"aegisproxy.io/aegis-proxy/internal/proxy"
+	"github.com/google/uuid"
 	"github.com/rs/zerolog/log"
 	"github.com/spf13/cobra"
 )
@@ -22,6 +23,7 @@ var inPort string
 var outPort string
 var proxyType string
 var tokenPath string
+var proxyuid string
 
 var runCmd = &cobra.Command{
 	Use:   "run",
@@ -34,10 +36,15 @@ func init() {
 	runCmd.Flags().StringVarP(&outPort, "outport", "o", "3128", "port to run the out proxy server on")
 	runCmd.Flags().StringVarP(&proxyType, "type", "t", "ingress", "type of proxy server to run")
 	runCmd.Flags().StringVarP(&tokenPath, "token", "k", "/var/run/secrets/tokens/token", "path to the token file")
+	runCmd.Flags().StringVarP(&proxyuid, "uuid", "u", uuid.New().String(), "uuid")
 
 }
 
 func runProxy(cmd *cobra.Command, args []string) {
+
+	if proxyuid == "" {
+		proxyuid = uuid.New().String()
+	}
 	var wg sync.WaitGroup
 
 	switch proxyType {
@@ -56,7 +63,7 @@ func runProxy(cmd *cobra.Command, args []string) {
 		Str("outPort", outPort).
 		Str("proxyType", proxyType).
 		Msg("Starting proxy server")
-	p := proxy.New(inPort, outPort, proxyType, tokenPath)
+	p := proxy.New(proxyuid, inPort, outPort, proxyType, tokenPath)
 
 	switch proxyType {
 	case IngressProxy:
