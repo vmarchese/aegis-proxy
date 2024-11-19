@@ -21,6 +21,7 @@ const (
 var inPort string
 var outPort string
 var proxyType string
+var tokenPath string
 
 var runCmd = &cobra.Command{
 	Use:   "run",
@@ -32,6 +33,7 @@ func init() {
 	runCmd.Flags().StringVarP(&inPort, "inport", "i", "3127", "port to run the in proxy server on")
 	runCmd.Flags().StringVarP(&outPort, "outport", "o", "3128", "port to run the out proxy server on")
 	runCmd.Flags().StringVarP(&proxyType, "type", "t", "ingress", "type of proxy server to run")
+	runCmd.Flags().StringVarP(&tokenPath, "token", "k", "/var/run/secrets/tokens/token", "path to the token file")
 
 }
 
@@ -54,7 +56,7 @@ func runProxy(cmd *cobra.Command, args []string) {
 		Str("outPort", outPort).
 		Str("proxyType", proxyType).
 		Msg("Starting proxy server")
-	p := proxy.New(inPort, outPort, proxyType)
+	p := proxy.New(inPort, outPort, proxyType, tokenPath)
 
 	switch proxyType {
 	case IngressProxy:
