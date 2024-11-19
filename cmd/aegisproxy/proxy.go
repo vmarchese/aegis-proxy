@@ -25,6 +25,11 @@ var proxyType string
 var tokenPath string
 var proxyuid string
 
+var identityProviderType string
+
+// vault specific flags
+var vaultAddr string
+
 var runCmd = &cobra.Command{
 	Use:   "run",
 	Short: "run the proxy server",
@@ -37,6 +42,10 @@ func init() {
 	runCmd.Flags().StringVarP(&proxyType, "type", "t", "ingress", "type of proxy server to run")
 	runCmd.Flags().StringVarP(&tokenPath, "token", "k", "/var/run/secrets/tokens/token", "path to the token file")
 	runCmd.Flags().StringVarP(&proxyuid, "uuid", "u", uuid.New().String(), "uuid")
+
+	runCmd.Flags().StringVarP(&identityProviderType, "identity-provider", "p", "hashicorp.vault", "identity provider type")
+
+	runCmd.Flags().StringVarP(&vaultAddr, "vault-address", "a", "http://127.0.0.1:8200", "vault address")
 
 }
 
