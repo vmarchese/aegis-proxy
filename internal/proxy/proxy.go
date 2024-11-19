@@ -11,21 +11,23 @@ import (
 )
 
 type ProxyServer struct {
-	InPort  string
-	OutPort string
-	Type    string
+	InPort    string
+	OutPort   string
+	Type      string
+	TokenPath string
 
 	uuid      string
 	inServer  *http.Server
 	outServer *http.Server
 }
 
-func New(inPort, outPort, proxyType string) *ProxyServer {
+func New(inPort, outPort, proxyType string, tokenPath string) *ProxyServer {
 	p := &ProxyServer{
-		InPort:  inPort,
-		OutPort: outPort,
-		Type:    proxyType,
-		uuid:    uuid.New().String(),
+		InPort:    inPort,
+		OutPort:   outPort,
+		Type:      proxyType,
+		TokenPath: tokenPath,
+		uuid:      uuid.New().String(),
 	}
 	p.inServer = &http.Server{Addr: fmt.Sprintf(":%s", p.InPort), Handler: http.HandlerFunc(p.proxyHandler)}
 	p.outServer = &http.Server{Addr: fmt.Sprintf(":%s", p.OutPort), Handler: http.HandlerFunc(p.proxyHandler)}
