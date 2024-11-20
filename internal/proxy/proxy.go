@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httputil"
 	"os"
+	"time"
 
 	"aegisproxy.io/aegis-proxy/internal/provider"
 	"aegisproxy.io/aegis-proxy/internal/provider/hashicorpvault"
@@ -27,6 +28,8 @@ type Config struct {
 	IdentityProviderType string
 	Identity             string
 
+	TokenGracePeriod time.Duration
+
 	VaultConfig hashicorpvault.Config
 }
 
@@ -35,6 +38,8 @@ type ProxyServer struct {
 
 	inServer  *http.Server
 	outServer *http.Server
+
+	token string
 }
 
 func New(cfg *Config) *ProxyServer {
@@ -69,34 +74,13 @@ func (p *ProxyServer) proxyHandler(w http.ResponseWriter, r *http.Request) {
 		Interface("url", r.URL).
 		Msg("Received request")
 	if p.cfg.Type == EgressProxy {
-		//read token
-		token, err := os.ReadFile(p.cfg.TokenPath)
+		err := p.getToken()
 		if err != nil {
-			log.Error().Err(err).Msg("failed to read token")
 			http.Error(w, "failed to read token", http.StatusInternalServerError)
 			return
 		}
-		var provider provider.Provider
-		switch p.cfg.IdentityProviderType {
-		case hashicorpvault.Name:
-			log.Trace().
-				Str("vault_addr", p.cfg.VaultConfig.VaultAddr).
-				Str("identity", p.cfg.Identity).
-				Str("token", string(token)).
-				Msg("getting token from hashicorp vault")
-			provider = hashicorpvault.New(p.cfg.VaultConfig.VaultAddr, p.cfg.Identity, string(token))
-		default:
-			log.Error().Str("type", p.cfg.IdentityProviderType).Msg("provider not known")
-		}
-
-		bearer, err := provider.GetToken(context.Background())
-		if err != nil {
-			log.Error().Err(err).Msg("failed to get token")
-			http.Error(w, "failed to get token", http.StatusInternalServerError)
-			return
-		}
-		log.Trace().Str("bearer", bearer).Msg("got bearer")
-		r.Header.Set("Authentication", fmt.Sprintf("Bearer %s", bearer))
+		log.Trace().Str("bearer", p.token).Msg("got bearer")
+		r.Header.Set("Authentication", fmt.Sprintf("Bearer %s", p.token))
 	}
 
 	proxy := &httputil.ReverseProxy{
@@ -110,4 +94,36 @@ func (p *ProxyServer) proxyHandler(w http.ResponseWriter, r *http.Request) {
 		},
 	}
 	proxy.ServeHTTP(w, r)
+}
+
+func (p *ProxyServer) getToken() error {
+	if p.token == "" || provider.IsTokenExpired(p.token, p.cfg.TokenGracePeriod) {
+		log.Trace().Msg("token is expired or empty, getting new token")
+		token, err := os.ReadFile(p.cfg.TokenPath)
+		if err != nil {
+			log.Error().Err(err).Msg("failed to read token")
+			return err
+		}
+		var provider provider.Provider
+		switch p.cfg.IdentityProviderType {
+		case hashicorpvault.Name:
+			log.Trace().
+				Str("vault_addr", p.cfg.VaultConfig.VaultAddr).
+				Str("identity", p.cfg.Identity).
+				Str("token", string(token)).
+				Msg("getting token from hashicorp vault")
+			provider = hashicorpvault.New(p.cfg.VaultConfig.VaultAddr, p.cfg.Identity, string(token))
+		default:
+			log.Error().Str("type", p.cfg.IdentityProviderType).Msg("provider not known")
+			return fmt.Errorf("provider not known")
+		}
+
+		p.token, err = provider.GetToken(context.Background())
+		if err != nil {
+			log.Error().Err(err).Msg("failed to get token")
+			return err
+		}
+	}
+	return nil
+
 }
