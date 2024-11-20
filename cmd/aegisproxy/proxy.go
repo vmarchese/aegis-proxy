@@ -6,6 +6,7 @@ import (
 	"os/signal"
 	"sync"
 	"syscall"
+	"time"
 
 	"aegisproxy.io/aegis-proxy/internal/provider/hashicorpvault"
 	"aegisproxy.io/aegis-proxy/internal/proxy"
@@ -22,6 +23,7 @@ var proxyuid string
 
 var identityProviderType string
 var identityName string
+var tokenGracePeriod time.Duration
 
 // vault specific flags
 var vaultAddr string
@@ -43,6 +45,7 @@ func init() {
 	runCmd.Flags().StringVarP(&identityProviderType, "identity-provider", "p", hashicorpvault.Name, "identity provider type")
 
 	runCmd.Flags().StringVarP(&vaultAddr, "vault-address", "a", "http://127.0.0.1:8200", "vault address")
+	runCmd.Flags().DurationVarP(&tokenGracePeriod, "token-grace-period", "g", 1*time.Minute, "token grace period")
 
 }
 
@@ -82,6 +85,7 @@ func runProxy(cmd *cobra.Command, args []string) {
 		TokenPath:            tokenPath,
 		Identity:             identityName,
 		IdentityProviderType: identityProviderType,
+		TokenGracePeriod:     tokenGracePeriod,
 		VaultConfig: hashicorpvault.Config{
 			VaultAddr: vaultAddr,
 		},
