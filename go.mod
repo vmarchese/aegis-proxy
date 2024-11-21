@@ -3,6 +3,8 @@ module aegisproxy.io/aegis-proxy
 go 1.23
 
 require (
+	github.com/go-jose/go-jose v2.6.3+incompatible
+	github.com/go-jose/go-jose/v4 v4.0.4
 	github.com/google/uuid v1.6.0
 	github.com/hashicorp/vault-client-go v0.4.3
 	github.com/rs/zerolog v1.33.0
@@ -20,6 +22,8 @@ require (
 	github.com/mitchellh/go-homedir v1.1.0 // indirect
 	github.com/ryanuber/go-glob v1.0.0 // indirect
 	github.com/spf13/pflag v1.0.5 // indirect
-	golang.org/x/sys v0.12.0 // indirect
+	golang.org/x/crypto v0.29.0 // indirect
+	golang.org/x/sys v0.27.0 // indirect
 	golang.org/x/time v0.0.0-20220922220347-f3bd1da661af // indirect
+	gopkg.in/go-jose/go-jose.v2 v2.6.3 // indirect
 )

@@ -22,7 +22,8 @@ var tokenPath string
 var proxyuid string
 
 var identityProviderType string
-var identityName string
+var identityOut string
+var identityIn []string
 var tokenGracePeriod time.Duration
 
 // vault specific flags
@@ -40,8 +41,10 @@ func init() {
 	runCmd.Flags().StringVarP(&proxyType, "type", "t", "ingress", "type of proxy server to run")
 	runCmd.Flags().StringVarP(&tokenPath, "token", "k", "/var/run/secrets/tokens/token", "path to the token file")
 	runCmd.Flags().StringVarP(&proxyuid, "uuid", "u", uuid.New().String(), "uuid")
-	runCmd.Flags().StringVarP(&identityName, "identity", "n", "aegisproxy", "identity name")
 
+	// identities
+	runCmd.Flags().StringVarP(&identityOut, "identity", "n", "aegisproxy", "identity name")
+	runCmd.Flags().StringSliceVar(&identityIn, "identity-allowed", []string{}, "identity allowed name")
 	runCmd.Flags().StringVarP(&identityProviderType, "identity-provider", "p", hashicorpvault.Name, "identity provider type")
 
 	runCmd.Flags().StringVarP(&vaultAddr, "vault-address", "a", "http://127.0.0.1:8200", "vault address")
@@ -72,7 +75,8 @@ func runProxy(cmd *cobra.Command, args []string) {
 		Str("outPort", outPort).
 		Str("proxyType", proxyType).
 		Str("identity_provider_type", identityProviderType).
-		Str("identity", identityName).
+		Strs("identityIn", identityIn).
+		Str("identityOut", identityOut).
 		Str("token_path", tokenPath).
 		Str("vault_addr", vaultAddr).
 		Msg("Starting proxy server")
@@ -83,14 +87,17 @@ func runProxy(cmd *cobra.Command, args []string) {
 		OutPort:              outPort,
 		Type:                 proxyType,
 		TokenPath:            tokenPath,
-		Identity:             identityName,
+		IdentityIn:           identityIn,
+		IdentityOut:          identityOut,
 		IdentityProviderType: identityProviderType,
-		TokenGracePeriod:     tokenGracePeriod,
 		VaultConfig: hashicorpvault.Config{
 			VaultAddr: vaultAddr,
 		},
 	}
-	p := proxy.New(cfg)
+	p, err := proxy.New(cfg)
+	if err != nil {
+		log.Fatal().Err(err).Msg("failed to create proxy server")
+	}
 
 	switch proxyType {
 	case proxy.IngressProxy:
