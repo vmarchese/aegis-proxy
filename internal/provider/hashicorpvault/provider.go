@@ -2,7 +2,9 @@ package hashicorpvault
 
 import (
 	"context"
+	"encoding/json"
 
+	"github.com/go-jose/go-jose/v4"
 	vault_client "github.com/hashicorp/vault-client-go"
 	vault_client_schema "github.com/hashicorp/vault-client-go/schema"
 	"github.com/rs/zerolog/log"
@@ -61,4 +63,29 @@ func (p *Provider) GetToken(ctx context.Context) (string, error) {
 	token := oidcInfo.Data["token"].(string)
 
 	return token, nil
+}
+
+func (p *Provider) GetPublicKeys(ctx context.Context) (*jose.JSONWebKeySet, error) {
+	client, err := vault_client.New(vault_client.WithAddress(p.VaultAddr))
+	if err != nil {
+		log.Error().Err(err).Msg("failed to create vault client")
+		return nil, err
+	}
+	keys, err := client.Identity.OidcReadPublicKeys(ctx)
+	if err != nil {
+		log.Error().Err(err).Msg("failed to read public keys")
+		return nil, err
+	}
+	k := keys.Data
+	jwkeys, err := json.Marshal(k)
+	if err != nil {
+		panic(err)
+	}
+
+	jwks := &jose.JSONWebKeySet{}
+	err = json.Unmarshal(jwkeys, jwks)
+	if err != nil {
+		return nil, err
+	}
+	return jwks, nil
 }
