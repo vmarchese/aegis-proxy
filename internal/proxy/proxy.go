@@ -183,10 +183,6 @@ func (p *ProxyServer) ingressProxyHandler(w http.ResponseWriter, r *http.Request
 		Str("host", r.Host).
 		Interface("url", r.URL).
 		Msg("Received IN request")
-	if p.ingressPolicy != nil {
-		log.Trace().Interface("policy", p.ingressPolicy).Msg("policy to be checked")
-	}
-
 	log.Debug().Msg("checking bearer token")
 	// Extract bearer token from Authorization header
 	authHeader := r.Header.Get("Authorization")
@@ -241,6 +237,15 @@ func (p *ProxyServer) ingressProxyHandler(w http.ResponseWriter, r *http.Request
 		return
 	}
 
+	if p.ingressPolicy != nil {
+		log.Trace().Interface("policy", p.ingressPolicy).Msg("policy to be checked")
+		if err := p.validate(r, claims); err != nil {
+			log.Error().Err(err).Str("policy", p.ingressPolicy.Name).Msg("policy blocked access")
+			http.Error(w, fmt.Sprintf("access blocked by ingress policy: %s", err.Error()), http.StatusUnauthorized)
+			return
+		}
+	}
+
 	proxy := &httputil.ReverseProxy{
 		Director: func(target *http.Request) {
 			target.URL.Scheme = "http"
@@ -252,6 +257,37 @@ func (p *ProxyServer) ingressProxyHandler(w http.ResponseWriter, r *http.Request
 		},
 	}
 	proxy.ServeHTTP(w, r)
+}
+
+func (p *ProxyServer) validate(r *http.Request, claims map[string]interface{}) error {
+	// get Path
+	for _, path := range p.ingressPolicy.Spec.Paths {
+		if strings.HasPrefix(r.URL.Path, path.Prefix) {
+			log.Trace().Str("path", path.Prefix).Msg("path matched")
+			if !sliceContains(path.AllowedMethods, r.Method) {
+				log.Trace().Str("method", r.Method).Msg("method matched")
+				return fmt.Errorf("method %s not allowed for prefix %s", r.Method, path.Prefix)
+			}
+
+			subject, ok := claims["name"].(string)
+			if !ok {
+				return fmt.Errorf("subject not found")
+			}
+			if !sliceContains(path.AllowedIdentities, subject) {
+				return fmt.Errorf("subject %s not allowed for prefix %s", subject, path.Prefix)
+			}
+		}
+	}
+	return nil
+}
+
+func sliceContains(slice []string, item string) bool {
+	for _, s := range slice {
+		if s == item {
+			return true
+		}
+	}
+	return false
 }
 
 func (p *ProxyServer) getToken() error {
