@@ -14,6 +14,12 @@ import (
 	"github.com/go-jose/go-jose/v4"
 	"github.com/go-jose/go-jose/v4/jwt"
 	"github.com/rs/zerolog/log"
+	aegisv1 "github.com/vmarchese/aegis-operator/api/v1"
+	v1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/client-go/dynamic"
+	"k8s.io/client-go/rest"
 )
 
 const (
@@ -31,6 +37,7 @@ type Config struct {
 	IdentityProviderType string
 	IdentityOut          string
 	IdentityIn           []string
+	Policy               string
 
 	TokenGracePeriod time.Duration
 
@@ -45,9 +52,11 @@ type ProxyServer struct {
 
 	token   string
 	jwkKeys *jose.JSONWebKeySet
+
+	ingressPolicy *aegisv1.IngressPolicy
 }
 
-func New(cfg *Config) (*ProxyServer, error) {
+func New(ctx context.Context, cfg *Config) (*ProxyServer, error) {
 	var err error
 	p := &ProxyServer{
 		cfg: cfg,
@@ -71,6 +80,49 @@ func New(cfg *Config) (*ProxyServer, error) {
 				return nil, err
 			}
 			log.Trace().Interface("keys", keys).Msg("got public keys")
+
+		}
+
+		if strings.TrimSpace(p.cfg.Policy) != "" {
+
+			namespacePath := "/var/run/secrets/kubernetes.io/serviceaccount/namespace"
+			namespace, err := os.ReadFile(namespacePath)
+			if err != nil {
+				return nil, err
+			}
+
+			config, err := rest.InClusterConfig()
+			if err != nil {
+				return nil, err
+			}
+			dynamicClient, err := dynamic.NewForConfig(config)
+			if err != nil {
+				return nil, err
+			}
+
+			ingressPolicies, err := dynamicClient.Resource(schema.GroupVersionResource{
+				Group:    "aegis.aegisproxy.io",
+				Version:  "v1",
+				Resource: "ingresspolicies",
+			}).Namespace(string(namespace)).
+				List(ctx, v1.ListOptions{})
+			if err != nil {
+				return nil, err
+			}
+
+			ip := &aegisv1.IngressPolicy{}
+			for _, ingressPolicy := range ingressPolicies.Items {
+				if ingressPolicy.GetName() == p.cfg.Policy {
+					err := runtime.DefaultUnstructuredConverter.FromUnstructured(ingressPolicy.UnstructuredContent(), ip)
+					if err != nil {
+						log.Error().Err(err).Msg("failed to convert ingress policy")
+						continue
+					}
+					break
+				}
+			}
+			p.ingressPolicy = ip
+			log.Trace().Interface("ingressPolicy", p.ingressPolicy).Msg("ingress policy found")
 
 		}
 	}
@@ -131,6 +183,9 @@ func (p *ProxyServer) ingressProxyHandler(w http.ResponseWriter, r *http.Request
 		Str("host", r.Host).
 		Interface("url", r.URL).
 		Msg("Received IN request")
+	if p.ingressPolicy != nil {
+		log.Trace().Interface("policy", p.ingressPolicy).Msg("policy to be checked")
+	}
 
 	log.Debug().Msg("checking bearer token")
 	// Extract bearer token from Authorization header
