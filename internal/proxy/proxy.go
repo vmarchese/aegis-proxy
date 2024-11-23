@@ -18,6 +18,7 @@ import (
 	v1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/apimachinery/pkg/watch"
 	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/rest"
 )
@@ -54,6 +55,9 @@ type ProxyServer struct {
 	jwkKeys *jose.JSONWebKeySet
 
 	ingressPolicy *aegisv1.IngressPolicy
+	dynamicClient *dynamic.DynamicClient
+	watcher       watch.Interface
+	namespace     string
 }
 
 func New(ctx context.Context, cfg *Config) (*ProxyServer, error) {
@@ -90,6 +94,7 @@ func New(ctx context.Context, cfg *Config) (*ProxyServer, error) {
 			if err != nil {
 				return nil, err
 			}
+			p.namespace = string(namespace)
 
 			config, err := rest.InClusterConfig()
 			if err != nil {
@@ -99,29 +104,27 @@ func New(ctx context.Context, cfg *Config) (*ProxyServer, error) {
 			if err != nil {
 				return nil, err
 			}
+			p.dynamicClient = dynamicClient
 
-			ingressPolicies, err := dynamicClient.Resource(schema.GroupVersionResource{
-				Group:    "aegis.aegisproxy.io",
-				Version:  "v1",
-				Resource: "ingresspolicies",
-			}).Namespace(string(namespace)).
-				List(ctx, v1.ListOptions{})
+			err = p.getIngressPolicy(ctx)
 			if err != nil {
 				return nil, err
 			}
 
-			ip := &aegisv1.IngressPolicy{}
-			for _, ingressPolicy := range ingressPolicies.Items {
-				if ingressPolicy.GetName() == p.cfg.Policy {
-					err := runtime.DefaultUnstructuredConverter.FromUnstructured(ingressPolicy.UnstructuredContent(), ip)
-					if err != nil {
-						log.Error().Err(err).Msg("failed to convert ingress policy")
-						continue
-					}
-					break
-				}
+			watcher, err := p.dynamicClient.Resource(schema.GroupVersionResource{
+				Group:    "aegis.aegisproxy.io",
+				Version:  "v1",
+				Resource: "ingresspolicies",
+			}).Namespace(p.namespace).Watch(ctx, v1.ListOptions{
+				FieldSelector: "metadata.name=" + p.ingressPolicy.Name,
+			})
+			if err != nil {
+				return nil, err
 			}
-			p.ingressPolicy = ip
+			p.watcher = watcher
+
+			go p.startWatcher(ctx)
+
 			log.Trace().Interface("ingressPolicy", p.ingressPolicy).Msg("ingress policy found")
 
 		}
@@ -141,6 +144,7 @@ func (p *ProxyServer) StartOutServer() error {
 func (p *ProxyServer) Shutdown(ctx context.Context) error {
 	p.inServer.Shutdown(ctx)
 	p.outServer.Shutdown(ctx)
+	p.watcher.Stop()
 	return nil
 }
 
@@ -319,5 +323,54 @@ func (p *ProxyServer) getToken() error {
 		}
 	}
 	return nil
+
+}
+
+func (p *ProxyServer) getIngressPolicy(ctx context.Context) error {
+
+	ingressPolicies, err := p.dynamicClient.Resource(schema.GroupVersionResource{
+		Group:    "aegis.aegisproxy.io",
+		Version:  "v1",
+		Resource: "ingresspolicies",
+	}).Namespace(p.namespace).
+		List(ctx, v1.ListOptions{
+			FieldSelector: "metadata.name=" + p.cfg.Policy,
+		})
+	if err != nil {
+		return err
+	}
+
+	ip := &aegisv1.IngressPolicy{}
+	for _, ingressPolicy := range ingressPolicies.Items {
+		if ingressPolicy.GetName() == p.cfg.Policy {
+			err := runtime.DefaultUnstructuredConverter.FromUnstructured(ingressPolicy.UnstructuredContent(), ip)
+			if err != nil {
+				log.Error().Err(err).Msg("failed to convert ingress policy")
+				continue
+			}
+			break
+		}
+	}
+	p.ingressPolicy = ip
+	return nil
+}
+
+func (p *ProxyServer) startWatcher(ctx context.Context) {
+
+	for event := range p.watcher.ResultChan() {
+		switch event.Type {
+		case watch.Added:
+			log.Trace().Msg("IngressPolicy added")
+			p.getIngressPolicy(ctx)
+		case watch.Modified:
+			log.Trace().Msg("IngressPolicy modified")
+			p.getIngressPolicy(ctx)
+		case watch.Deleted:
+			log.Trace().Msg("IngressPolicy deleted")
+			p.ingressPolicy = nil
+		default:
+			log.Error().Str("type", string(event.Type)).Msg("unknown event type")
+		}
+	}
 
 }
