@@ -10,6 +10,7 @@ import (
 
 	"aegisproxy.io/aegis-proxy/internal/provider/hashicorpvault"
 	"aegisproxy.io/aegis-proxy/internal/proxy"
+	"aegisproxy.io/aegis-proxy/internal/traces"
 	"github.com/google/uuid"
 	"github.com/rs/zerolog/log"
 	"github.com/spf13/cobra"
@@ -106,6 +107,12 @@ func runProxy(cmd *cobra.Command, args []string) {
 	if err != nil {
 		log.Fatal().Err(err).Msg("failed to create proxy server")
 	}
+
+	tracer, err := traces.New(cmd.Context())
+	if err != nil {
+		log.Fatal().Err(err).Msg("failed to create tracer")
+	}
+	defer tracer.Shutdown(cmd.Context())
 
 	switch proxyType {
 	case proxy.IngressProxy:
