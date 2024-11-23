@@ -14,6 +14,13 @@ import (
 	"github.com/go-jose/go-jose/v4"
 	"github.com/go-jose/go-jose/v4/jwt"
 	"github.com/rs/zerolog/log"
+	aegisv1 "github.com/vmarchese/aegis-operator/api/v1"
+	v1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/apimachinery/pkg/watch"
+	"k8s.io/client-go/dynamic"
+	"k8s.io/client-go/rest"
 )
 
 const (
@@ -31,6 +38,7 @@ type Config struct {
 	IdentityProviderType string
 	IdentityOut          string
 	IdentityIn           []string
+	Policy               string
 
 	TokenGracePeriod time.Duration
 
@@ -45,9 +53,14 @@ type ProxyServer struct {
 
 	token   string
 	jwkKeys *jose.JSONWebKeySet
+
+	ingressPolicy *aegisv1.IngressPolicy
+	dynamicClient *dynamic.DynamicClient
+	watcher       watch.Interface
+	namespace     string
 }
 
-func New(cfg *Config) (*ProxyServer, error) {
+func New(ctx context.Context, cfg *Config) (*ProxyServer, error) {
 	var err error
 	p := &ProxyServer{
 		cfg: cfg,
@@ -73,6 +86,48 @@ func New(cfg *Config) (*ProxyServer, error) {
 			log.Trace().Interface("keys", keys).Msg("got public keys")
 
 		}
+
+		if strings.TrimSpace(p.cfg.Policy) != "" {
+
+			namespacePath := "/var/run/secrets/kubernetes.io/serviceaccount/namespace"
+			namespace, err := os.ReadFile(namespacePath)
+			if err != nil {
+				return nil, err
+			}
+			p.namespace = string(namespace)
+
+			config, err := rest.InClusterConfig()
+			if err != nil {
+				return nil, err
+			}
+			dynamicClient, err := dynamic.NewForConfig(config)
+			if err != nil {
+				return nil, err
+			}
+			p.dynamicClient = dynamicClient
+
+			err = p.getIngressPolicy(ctx)
+			if err != nil {
+				return nil, err
+			}
+
+			watcher, err := p.dynamicClient.Resource(schema.GroupVersionResource{
+				Group:    "aegis.aegisproxy.io",
+				Version:  "v1",
+				Resource: "ingresspolicies",
+			}).Namespace(p.namespace).Watch(ctx, v1.ListOptions{
+				FieldSelector: "metadata.name=" + p.ingressPolicy.Name,
+			})
+			if err != nil {
+				return nil, err
+			}
+			p.watcher = watcher
+
+			go p.startWatcher(ctx)
+
+			log.Trace().Interface("ingressPolicy", p.ingressPolicy).Msg("ingress policy found")
+
+		}
 	}
 	return p, nil
 }
@@ -89,6 +144,7 @@ func (p *ProxyServer) StartOutServer() error {
 func (p *ProxyServer) Shutdown(ctx context.Context) error {
 	p.inServer.Shutdown(ctx)
 	p.outServer.Shutdown(ctx)
+	p.watcher.Stop()
 	return nil
 }
 
@@ -131,7 +187,6 @@ func (p *ProxyServer) ingressProxyHandler(w http.ResponseWriter, r *http.Request
 		Str("host", r.Host).
 		Interface("url", r.URL).
 		Msg("Received IN request")
-
 	log.Debug().Msg("checking bearer token")
 	// Extract bearer token from Authorization header
 	authHeader := r.Header.Get("Authorization")
@@ -186,6 +241,15 @@ func (p *ProxyServer) ingressProxyHandler(w http.ResponseWriter, r *http.Request
 		return
 	}
 
+	if p.ingressPolicy != nil {
+		log.Trace().Interface("policy", p.ingressPolicy).Msg("policy to be checked")
+		if err := p.validate(r, claims); err != nil {
+			log.Error().Err(err).Str("policy", p.ingressPolicy.Name).Msg("policy blocked access")
+			http.Error(w, fmt.Sprintf("access blocked by ingress policy: %s", err.Error()), http.StatusUnauthorized)
+			return
+		}
+	}
+
 	proxy := &httputil.ReverseProxy{
 		Director: func(target *http.Request) {
 			target.URL.Scheme = "http"
@@ -197,6 +261,37 @@ func (p *ProxyServer) ingressProxyHandler(w http.ResponseWriter, r *http.Request
 		},
 	}
 	proxy.ServeHTTP(w, r)
+}
+
+func (p *ProxyServer) validate(r *http.Request, claims map[string]interface{}) error {
+	// get Path
+	for _, path := range p.ingressPolicy.Spec.Paths {
+		if strings.HasPrefix(r.URL.Path, path.Prefix) {
+			log.Trace().Str("path", path.Prefix).Msg("path matched")
+			if !sliceContains(path.AllowedMethods, r.Method) {
+				log.Trace().Str("method", r.Method).Msg("method matched")
+				return fmt.Errorf("method %s not allowed for prefix %s", r.Method, path.Prefix)
+			}
+
+			subject, ok := claims["name"].(string)
+			if !ok {
+				return fmt.Errorf("subject not found")
+			}
+			if !sliceContains(path.AllowedIdentities, subject) {
+				return fmt.Errorf("subject %s not allowed for prefix %s", subject, path.Prefix)
+			}
+		}
+	}
+	return nil
+}
+
+func sliceContains(slice []string, item string) bool {
+	for _, s := range slice {
+		if s == item {
+			return true
+		}
+	}
+	return false
 }
 
 func (p *ProxyServer) getToken() error {
@@ -228,5 +323,54 @@ func (p *ProxyServer) getToken() error {
 		}
 	}
 	return nil
+
+}
+
+func (p *ProxyServer) getIngressPolicy(ctx context.Context) error {
+
+	ingressPolicies, err := p.dynamicClient.Resource(schema.GroupVersionResource{
+		Group:    "aegis.aegisproxy.io",
+		Version:  "v1",
+		Resource: "ingresspolicies",
+	}).Namespace(p.namespace).
+		List(ctx, v1.ListOptions{
+			FieldSelector: "metadata.name=" + p.cfg.Policy,
+		})
+	if err != nil {
+		return err
+	}
+
+	ip := &aegisv1.IngressPolicy{}
+	for _, ingressPolicy := range ingressPolicies.Items {
+		if ingressPolicy.GetName() == p.cfg.Policy {
+			err := runtime.DefaultUnstructuredConverter.FromUnstructured(ingressPolicy.UnstructuredContent(), ip)
+			if err != nil {
+				log.Error().Err(err).Msg("failed to convert ingress policy")
+				continue
+			}
+			break
+		}
+	}
+	p.ingressPolicy = ip
+	return nil
+}
+
+func (p *ProxyServer) startWatcher(ctx context.Context) {
+
+	for event := range p.watcher.ResultChan() {
+		switch event.Type {
+		case watch.Added:
+			log.Trace().Msg("IngressPolicy added")
+			p.getIngressPolicy(ctx)
+		case watch.Modified:
+			log.Trace().Msg("IngressPolicy modified")
+			p.getIngressPolicy(ctx)
+		case watch.Deleted:
+			log.Trace().Msg("IngressPolicy deleted")
+			p.ingressPolicy = nil
+		default:
+			log.Error().Str("type", string(event.Type)).Msg("unknown event type")
+		}
+	}
 
 }

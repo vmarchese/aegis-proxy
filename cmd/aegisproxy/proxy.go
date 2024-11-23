@@ -26,6 +26,8 @@ var identityOut string
 var identityIn []string
 var tokenGracePeriod time.Duration
 
+var policy string
+
 // vault specific flags
 var vaultAddr string
 
@@ -47,9 +49,14 @@ func init() {
 	runCmd.Flags().StringSliceVar(&identityIn, "identity-allowed", []string{}, "identity allowed name")
 	runCmd.Flags().StringVarP(&identityProviderType, "identity-provider", "p", hashicorpvault.Name, "identity provider type")
 
+	// vault
 	runCmd.Flags().StringVarP(&vaultAddr, "vault-address", "a", "http://127.0.0.1:8200", "vault address")
+
+	// token
 	runCmd.Flags().DurationVarP(&tokenGracePeriod, "token-grace-period", "g", 1*time.Minute, "token grace period")
 
+	// policy
+	runCmd.Flags().StringVarP(&policy, "policy", "l", "", "policy name")
 }
 
 func runProxy(cmd *cobra.Command, args []string) {
@@ -89,12 +96,13 @@ func runProxy(cmd *cobra.Command, args []string) {
 		TokenPath:            tokenPath,
 		IdentityIn:           identityIn,
 		IdentityOut:          identityOut,
+		Policy:               policy,
 		IdentityProviderType: identityProviderType,
 		VaultConfig: hashicorpvault.Config{
 			VaultAddr: vaultAddr,
 		},
 	}
-	p, err := proxy.New(cfg)
+	p, err := proxy.New(cmd.Context(), cfg)
 	if err != nil {
 		log.Fatal().Err(err).Msg("failed to create proxy server")
 	}
