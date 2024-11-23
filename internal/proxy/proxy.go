@@ -15,6 +15,11 @@ import (
 	"github.com/go-jose/go-jose/v4/jwt"
 	"github.com/rs/zerolog/log"
 	aegisv1 "github.com/vmarchese/aegis-operator/api/v1"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
+	"go.opentelemetry.io/otel/propagation"
+	"go.opentelemetry.io/otel/trace"
 	v1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
@@ -27,6 +32,10 @@ const (
 	IngressEgressProxy = "ingress-egress"
 	IngressProxy       = "ingress"
 	EgressProxy        = "egress"
+)
+
+var (
+	tracer = otel.GetTracerProvider().Tracer("aegisproxy")
 )
 
 type Config struct {
@@ -149,16 +158,32 @@ func (p *ProxyServer) Shutdown(ctx context.Context) error {
 }
 
 func (p *ProxyServer) egressProxyHandler(w http.ResponseWriter, r *http.Request) {
+	ctx := otel.GetTextMapPropagator().Extract(r.Context(), propagation.HeaderCarrier(r.Header))
+	ctx, span := tracer.Start(ctx, fmt.Sprintf("%s-egress", p.cfg.IdentityOut),
+		trace.WithSpanKind(trace.SpanKindServer),
+	)
+	defer span.End()
+	r = r.WithContext(ctx)
+
+	span.SetAttributes(attribute.String("aegis.proxy.identity", p.cfg.IdentityOut),
+		attribute.String("aegis.proxy.type", p.cfg.Type),
+		attribute.String("aegis.proxy.uuid", p.cfg.UUID),
+		attribute.String("aegis.proxy.namespace", p.namespace),
+	)
+
 	log.Trace().
 		Str("type", p.cfg.Type).
 		Str("uuid", p.cfg.UUID).
 		Str("identity_provider_type", p.cfg.IdentityProviderType).
 		Str("method", r.Method).
 		Str("host", r.Host).
+		Interface("headers", r.Header).
 		Interface("url", r.URL).
 		Msg("Received OUT request")
 	err := p.getToken()
 	if err != nil {
+		span.SetStatus(codes.Error, err.Error())
+		span.RecordError(err)
 		http.Error(w, "failed to read token", http.StatusInternalServerError)
 		return
 	}
@@ -167,6 +192,8 @@ func (p *ProxyServer) egressProxyHandler(w http.ResponseWriter, r *http.Request)
 
 	proxy := &httputil.ReverseProxy{
 		Director: func(target *http.Request) {
+			otel.GetTextMapPropagator().Inject(r.Context(), propagation.HeaderCarrier(target.Header))
+			target = target.WithContext(r.Context())
 			target.URL.Scheme = "http"
 			target.URL.Host = r.Host
 			target.Host = r.Host
@@ -179,13 +206,23 @@ func (p *ProxyServer) egressProxyHandler(w http.ResponseWriter, r *http.Request)
 }
 
 func (p *ProxyServer) ingressProxyHandler(w http.ResponseWriter, r *http.Request) {
+
+	ctx := otel.GetTextMapPropagator().Extract(r.Context(), propagation.HeaderCarrier(r.Header))
+	ctx, span := tracer.Start(ctx, "ingress", trace.WithSpanKind(trace.SpanKindServer))
+	defer span.End()
+	r = r.WithContext(ctx)
+	span.SetAttributes(
+		attribute.String("aegis.proxy.type", p.cfg.Type),
+		attribute.String("aegis.proxy.uuid", p.cfg.UUID),
+		attribute.String("aegis.proxy.namespace", p.namespace),
+	)
 	log.Trace().
 		Str("type", p.cfg.Type).
 		Str("uuid", p.cfg.UUID).
 		Str("identity_provider_type", p.cfg.IdentityProviderType).
 		Str("method", r.Method).
 		Str("host", r.Host).
-		Interface("url", r.URL).
+		Interface("headers", r.Header).
 		Msg("Received IN request")
 	log.Debug().Msg("checking bearer token")
 	// Extract bearer token from Authorization header
@@ -193,6 +230,8 @@ func (p *ProxyServer) ingressProxyHandler(w http.ResponseWriter, r *http.Request
 	if authHeader == "" {
 		log.Error().Msg("missing Authorization header")
 		http.Error(w, "missing Authorization header", http.StatusUnauthorized)
+		span.SetStatus(codes.Error, "missing Authorization header")
+		span.RecordError(fmt.Errorf("missing Authorization header"))
 		return
 	}
 
@@ -200,6 +239,8 @@ func (p *ProxyServer) ingressProxyHandler(w http.ResponseWriter, r *http.Request
 	if len(parts) != 2 || parts[0] != "Bearer" {
 		log.Error().Msg("invalid Authorization header format")
 		http.Error(w, "invalid Authorization header format", http.StatusUnauthorized)
+		span.SetStatus(codes.Error, "invalid Authorization header format")
+		span.RecordError(fmt.Errorf("invalid Authorization header format"))
 		return
 	}
 
@@ -215,6 +256,8 @@ func (p *ProxyServer) ingressProxyHandler(w http.ResponseWriter, r *http.Request
 	if err != nil {
 		log.Error().Err(err).Msg("failed to parse JWT token")
 		http.Error(w, "invalid token format", http.StatusUnauthorized)
+		span.SetStatus(codes.Error, err.Error())
+		span.RecordError(err)
 		return
 	}
 
@@ -223,6 +266,8 @@ func (p *ProxyServer) ingressProxyHandler(w http.ResponseWriter, r *http.Request
 	if p.jwkKeys.Key(kid) == nil {
 		log.Error().Str("keyID", kid).Msg("key not found")
 		http.Error(w, "key not found", http.StatusUnauthorized)
+		span.SetStatus(codes.Error, "key not found")
+		span.RecordError(fmt.Errorf("key not found"))
 		return
 	}
 
@@ -238,20 +283,29 @@ func (p *ProxyServer) ingressProxyHandler(w http.ResponseWriter, r *http.Request
 	if err != nil {
 		log.Error().Err(err).Msg("failed to validate token")
 		http.Error(w, "invalid token signature", http.StatusUnauthorized)
+		span.RecordError(err)
 		return
 	}
+	span.SetAttributes(
+		attribute.String("aegis.proxy.in.subject", fmt.Sprintf("%v", claims["sub"])),
+		attribute.String("aegis.proxy.in.name", fmt.Sprintf("%v", claims["name"])),
+	)
 
 	if p.ingressPolicy != nil {
 		log.Trace().Interface("policy", p.ingressPolicy).Msg("policy to be checked")
 		if err := p.validate(r, claims); err != nil {
 			log.Error().Err(err).Str("policy", p.ingressPolicy.Name).Msg("policy blocked access")
 			http.Error(w, fmt.Sprintf("access blocked by ingress policy: %s", err.Error()), http.StatusUnauthorized)
+			span.SetStatus(codes.Error, err.Error())
+			span.RecordError(err)
 			return
 		}
 	}
 
 	proxy := &httputil.ReverseProxy{
 		Director: func(target *http.Request) {
+			otel.GetTextMapPropagator().Inject(r.Context(), propagation.HeaderCarrier(target.Header))
+			target = target.WithContext(r.Context())
 			target.URL.Scheme = "http"
 			target.URL.Host = r.Host
 			target.Host = r.Host
