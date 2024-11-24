@@ -1,7 +1,10 @@
-# Dockerfile
-
 # Use the official Golang image as a build stage
 FROM golang:1.23 AS builder
+
+ARG GOVERSION
+ARG VERSION
+ARG BUILDUSER
+ARG BUILDTIME
 
 # Set the Current Working Directory inside the container
 WORKDIR /app
@@ -16,7 +19,12 @@ COPY internal/ internal/
 
 # Build the Go app with CGO disabled to ensure a statically linked binary
 RUN go mod download
-RUN CGO_ENABLED=0 GOOS=linux go build -o aegisproxy aegisproxy.io/aegis-proxy/cmd/aegisproxy
+RUN CGO_ENABLED=0 GOOS=linux go build \
+    -ldflags "-X 'main.Version=${VERSION}' \
+    -X 'main.GoVersion=${GOVERSION}' \
+    -X 'main.BuildUser=${BUILDUSER}' \
+    -X 'main.BuildTime=${BUILDTIME}'" \
+    -o aegisproxy aegisproxy.io/aegis-proxy/cmd/aegisproxy
 
 # Start a new stage from scratch
 FROM alpine:latest

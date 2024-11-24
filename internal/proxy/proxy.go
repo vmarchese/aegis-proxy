@@ -17,8 +17,8 @@ import (
 	aegisv1 "github.com/vmarchese/aegis-operator/api/v1"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
-	"go.opentelemetry.io/otel/codes"
 	"go.opentelemetry.io/otel/propagation"
+	semconv "go.opentelemetry.io/otel/semconv/v1.17.0"
 	"go.opentelemetry.io/otel/trace"
 	v1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -38,6 +38,13 @@ var (
 	tracer = otel.GetTracerProvider().Tracer("aegisproxy")
 )
 
+type VersionInfo struct {
+	Version   string
+	GoVersion string
+	BuildUser string
+	BuildTime string
+}
+
 type Config struct {
 	InPort               string
 	OutPort              string
@@ -48,6 +55,7 @@ type Config struct {
 	IdentityOut          string
 	IdentityIn           []string
 	Policy               string
+	VersionInfo          VersionInfo
 
 	TokenGracePeriod time.Duration
 
@@ -159,17 +167,13 @@ func (p *ProxyServer) Shutdown(ctx context.Context) error {
 
 func (p *ProxyServer) egressProxyHandler(w http.ResponseWriter, r *http.Request) {
 	ctx := otel.GetTextMapPropagator().Extract(r.Context(), propagation.HeaderCarrier(r.Header))
-	ctx, span := tracer.Start(ctx, fmt.Sprintf("%s-egress", p.cfg.IdentityOut),
+	ctx, span := tracer.Start(ctx, fmt.Sprintf("egress::%s", p.cfg.IdentityOut),
 		trace.WithSpanKind(trace.SpanKindServer),
 	)
 	defer span.End()
 	r = r.WithContext(ctx)
 
-	span.SetAttributes(attribute.String("aegis.proxy.identity", p.cfg.IdentityOut),
-		attribute.String("aegis.proxy.type", p.cfg.Type),
-		attribute.String("aegis.proxy.uuid", p.cfg.UUID),
-		attribute.String("aegis.proxy.namespace", p.namespace),
-	)
+	p.enrichSpan(span, r)
 
 	log.Trace().
 		Str("type", p.cfg.Type).
@@ -182,9 +186,7 @@ func (p *ProxyServer) egressProxyHandler(w http.ResponseWriter, r *http.Request)
 		Msg("Received OUT request")
 	err := p.getToken()
 	if err != nil {
-		span.SetStatus(codes.Error, err.Error())
-		span.RecordError(err)
-		http.Error(w, "failed to read token", http.StatusInternalServerError)
+		HTTPError(w, http.StatusInternalServerError, err, span)
 		return
 	}
 	log.Trace().Str("bearer", p.token).Str("identityOut", p.cfg.IdentityOut).Msg("got bearer")
@@ -211,11 +213,9 @@ func (p *ProxyServer) ingressProxyHandler(w http.ResponseWriter, r *http.Request
 	ctx, span := tracer.Start(ctx, "ingress", trace.WithSpanKind(trace.SpanKindServer))
 	defer span.End()
 	r = r.WithContext(ctx)
-	span.SetAttributes(
-		attribute.String("aegis.proxy.type", p.cfg.Type),
-		attribute.String("aegis.proxy.uuid", p.cfg.UUID),
-		attribute.String("aegis.proxy.namespace", p.namespace),
-	)
+
+	p.enrichSpan(span, r)
+
 	log.Trace().
 		Str("type", p.cfg.Type).
 		Str("uuid", p.cfg.UUID).
@@ -228,19 +228,13 @@ func (p *ProxyServer) ingressProxyHandler(w http.ResponseWriter, r *http.Request
 	// Extract bearer token from Authorization header
 	authHeader := r.Header.Get("Authorization")
 	if authHeader == "" {
-		log.Error().Msg("missing Authorization header")
-		http.Error(w, "missing Authorization header", http.StatusUnauthorized)
-		span.SetStatus(codes.Error, "missing Authorization header")
-		span.RecordError(fmt.Errorf("missing Authorization header"))
+		HTTPError(w, http.StatusUnauthorized, fmt.Errorf("missing Authorization header"), span)
 		return
 	}
 
 	parts := strings.Split(authHeader, " ")
 	if len(parts) != 2 || parts[0] != "Bearer" {
-		log.Error().Msg("invalid Authorization header format")
-		http.Error(w, "invalid Authorization header format", http.StatusUnauthorized)
-		span.SetStatus(codes.Error, "invalid Authorization header format")
-		span.RecordError(fmt.Errorf("invalid Authorization header format"))
+		HTTPError(w, http.StatusUnauthorized, fmt.Errorf("invalid Authorization header format"), span)
 		return
 	}
 
@@ -254,20 +248,14 @@ func (p *ProxyServer) ingressProxyHandler(w http.ResponseWriter, r *http.Request
 	signatureAlgorithms := []jose.SignatureAlgorithm{jose.RS256} // Replace with actual supported algorithms
 	token, err := jwt.ParseSigned(bearerToken, signatureAlgorithms)
 	if err != nil {
-		log.Error().Err(err).Msg("failed to parse JWT token")
-		http.Error(w, "invalid token format", http.StatusUnauthorized)
-		span.SetStatus(codes.Error, err.Error())
-		span.RecordError(err)
+		HTTPError(w, http.StatusUnauthorized, err, span)
 		return
 	}
 
 	// Try to validate with jwt public key
 	kid := token.Headers[0].KeyID
 	if p.jwkKeys.Key(kid) == nil {
-		log.Error().Str("keyID", kid).Msg("key not found")
-		http.Error(w, "key not found", http.StatusUnauthorized)
-		span.SetStatus(codes.Error, "key not found")
-		span.RecordError(fmt.Errorf("key not found"))
+		HTTPError(w, http.StatusUnauthorized, fmt.Errorf("key not found"), span)
 		return
 	}
 
@@ -281,9 +269,7 @@ func (p *ProxyServer) ingressProxyHandler(w http.ResponseWriter, r *http.Request
 	key := p.jwkKeys.Key(kid)[0]
 	err = token.Claims(&key, &claims)
 	if err != nil {
-		log.Error().Err(err).Msg("failed to validate token")
-		http.Error(w, "invalid token signature", http.StatusUnauthorized)
-		span.RecordError(err)
+		HTTPError(w, http.StatusUnauthorized, err, span)
 		return
 	}
 	span.SetAttributes(
@@ -294,10 +280,8 @@ func (p *ProxyServer) ingressProxyHandler(w http.ResponseWriter, r *http.Request
 	if p.ingressPolicy != nil {
 		log.Trace().Interface("policy", p.ingressPolicy).Msg("policy to be checked")
 		if err := p.validate(r, claims); err != nil {
-			log.Error().Err(err).Str("policy", p.ingressPolicy.Name).Msg("policy blocked access")
-			http.Error(w, fmt.Sprintf("access blocked by ingress policy: %s", err.Error()), http.StatusUnauthorized)
-			span.SetStatus(codes.Error, err.Error())
-			span.RecordError(err)
+			span.AddEvent("policy blocked access", trace.WithAttributes(attribute.String("policy", p.ingressPolicy.Name)))
+			HTTPError(w, http.StatusUnauthorized, err, span)
 			return
 		}
 	}
@@ -427,4 +411,25 @@ func (p *ProxyServer) startWatcher(ctx context.Context) {
 		}
 	}
 
+}
+
+func (p *ProxyServer) enrichSpan(span trace.Span, r *http.Request) {
+	span.SetAttributes(semconv.HTTPMethod(r.Method),
+		semconv.HTTPTarget(r.URL.Path),
+		semconv.HTTPUserAgent(r.UserAgent()),
+		semconv.HTTPClientIP(r.RemoteAddr),
+		semconv.HTTPURL(r.URL.String()),
+	)
+	span.SetAttributes(
+		attribute.String("aegis.proxy.version", p.cfg.VersionInfo.Version),
+		attribute.String("aegis.proxy.go_version", p.cfg.VersionInfo.GoVersion),
+		attribute.String("aegis.proxy.build_user", p.cfg.VersionInfo.BuildUser),
+		attribute.String("aegis.proxy.build_time", p.cfg.VersionInfo.BuildTime),
+		attribute.String("aegis.proxy.policy", p.cfg.Policy),
+		attribute.String("aegis.proxy.identity_provider_type", p.cfg.IdentityProviderType),
+		attribute.String("aegis.proxy.identity", p.cfg.IdentityOut),
+		attribute.String("aegis.proxy.type", p.cfg.Type),
+		attribute.String("aegis.proxy.uuid", p.cfg.UUID),
+		attribute.String("aegis.proxy.namespace", p.namespace),
+	)
 }
