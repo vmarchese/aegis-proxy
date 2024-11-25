@@ -102,6 +102,12 @@ func runProxy(cmd *cobra.Command, args []string) {
 		VaultConfig: hashicorpvault.Config{
 			VaultAddr: vaultAddr,
 		},
+		VersionInfo: proxy.VersionInfo{
+			Version:   Version,
+			GoVersion: GoVersion,
+			BuildUser: BuildUser,
+			BuildTime: BuildTime,
+		},
 	}
 	p, err := proxy.New(cmd.Context(), cfg)
 	if err != nil {
