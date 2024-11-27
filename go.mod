@@ -8,8 +8,7 @@ require (
 	github.com/hashicorp/vault-client-go v0.4.3
 	github.com/rs/zerolog v1.33.0
 	github.com/spf13/cobra v1.8.1
-	github.com/vmarchese/aegis-operator v0.0.0-20241122132748-be690650ebc5
-	go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp v0.44.0
+	github.com/vmarchese/aegis-operator v0.0.1
 	go.opentelemetry.io/contrib/propagators/autoprop v0.57.0
 	go.opentelemetry.io/otel v1.32.0
 	go.opentelemetry.io/otel/exporters/otlp/otlptrace v1.32.0
@@ -25,7 +24,6 @@ require (
 require (
 	github.com/cenkalti/backoff/v4 v4.3.0 // indirect
 	github.com/davecgh/go-spew v1.1.1 // indirect
-	github.com/felixge/httpsnoop v1.0.3 // indirect
 	github.com/go-logr/logr v1.4.2 // indirect
 	github.com/go-logr/stdr v1.2.2 // indirect
 	github.com/gogo/protobuf v1.3.2 // indirect
