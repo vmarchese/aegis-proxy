@@ -16,8 +16,6 @@ github.com/evanphx/json-patch/v5 v5.8.0 h1:lRj6N9Nci7MvzrXuX6HFzU8XjmhPiXPlsKEy1
 github.com/evanphx/json-patch/v5 v5.8.0/go.mod h1:VNkHZ/282BpEyt/tObQO8s5CMPmYYq14uClGH4abBuQ=
 github.com/fatih/color v1.16.0 h1:zmkK9Ngbjj+K0yRhTVONQh1p/HknKYSlNT+vZCzyokM=
 github.com/fatih/color v1.16.0/go.mod h1:fL2Sau1YI5c0pdGEVCbKQbLXB6edEj1ZgiY4NijnWvE=
-github.com/felixge/httpsnoop v1.0.3 h1:s/nj+GCswXYzN5v2DpNMuMQYe+0DDwt5WVCU6CWBdXk=
-github.com/felixge/httpsnoop v1.0.3/go.mod h1:m8KPJKqk1gH5J9DgRY2ASl2lWCfGKXixSwevea8zH2U=
 github.com/fsnotify/fsnotify v1.7.0 h1:8JEhPFa5W2WU7YfeZzPNqzMP6Lwt7L2715Ggo0nosvA=
 github.com/fsnotify/fsnotify v1.7.0/go.mod h1:40Bi/Hjc2AVfZrqy+aj+yEI+/bRxZnMJyTJwOpGvigM=
 github.com/go-jose/go-jose/v4 v4.0.4 h1:VsjPI33J0SB9vQM6PLmNjoHqMQNGPiZ0rHL7Ni7Q6/E=
@@ -136,12 +134,10 @@ github.com/stretchr/objx v0.1.0/go.mod h1:HFkY916IF+rwdDfMAkV7OtwuqBVzrE8GR6GFx+
 github.com/stretchr/testify v1.3.0/go.mod h1:M5WIy9Dh21IEIfnGCwXGc5bZfKNJtfHm1UVUgZn+9EI=
 github.com/stretchr/testify v1.9.0 h1:HtqpIVDClZ4nwg75+f6Lvsy/wHu+3BoSGCbBAcpTsTg=
 github.com/stretchr/testify v1.9.0/go.mod h1:r2ic/lqez/lEtzL7wO/rwa5dbSLXVDPFyf8C91i36aY=
-github.com/vmarchese/aegis-operator v0.0.0-20241122132748-be690650ebc5 h1:Ou/tEf+mvPuV3r0jHLfF8ySx2d7HdZCONoXUQtczpa8=
-github.com/vmarchese/aegis-operator v0.0.0-20241122132748-be690650ebc5/go.mod h1:Y5b0lTJj+/TrahmAgcXy6J1214jPm8KXTMLEMmjO1fQ=
+github.com/vmarchese/aegis-operator v0.0.1 h1:5zxzfwYFG6DpGkO/jcqbOQ/+WEm/qb1OJEW0ZROE5wo=
+github.com/vmarchese/aegis-operator v0.0.1/go.mod h1:Y5b0lTJj+/TrahmAgcXy6J1214jPm8KXTMLEMmjO1fQ=
 github.com/yuin/goldmark v1.1.27/go.mod h1:3hX8gzYuyVAZsxl0MRgGTJEmQBFcNTphYh9decYSb74=
 github.com/yuin/goldmark v1.2.1/go.mod h1:3hX8gzYuyVAZsxl0MRgGTJEmQBFcNTphYh9decYSb74=
-go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp v0.44.0 h1:KfYpVmrjI7JuToy5k8XV3nkapjWx48k4E4JOtVstzQI=
-go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp v0.44.0/go.mod h1:SeQhzAEccGVZVEy7aH87Nh0km+utSpo1pTv6eMMop48=
 go.opentelemetry.io/contrib/propagators/autoprop v0.57.0 h1:bNPJOdT5154XxzeFmrh8R+PXnV4t3TZEczy8gHEpcpg=
 go.opentelemetry.io/contrib/propagators/autoprop v0.57.0/go.mod h1:Tb0j0mK+QatKdCxCKPN7CSzc7kx/q34/KaohJx/N96s=
 go.opentelemetry.io/contrib/propagators/aws v1.32.0 h1:NELzr8bW7a7aHVZj5gaep1PfkvoSCGx+1qNGZx/uhhU=
