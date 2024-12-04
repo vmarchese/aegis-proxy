@@ -6,10 +6,13 @@ import (
 	"encoding/json"
 	"strings"
 	"time"
+
+	"github.com/go-jose/go-jose/v4"
 )
 
 type Provider interface {
 	GetToken(ctx context.Context) (string, error)
+	GetPublicKeys(ctx context.Context) (*jose.JSONWebKeySet, error)
 }
 
 func IsTokenExpired(token string, gracePeriod time.Duration) bool {

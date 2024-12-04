@@ -8,6 +8,7 @@ import (
 	"syscall"
 	"time"
 
+	"aegisproxy.io/aegis-proxy/internal/provider/azure"
 	"aegisproxy.io/aegis-proxy/internal/provider/hashicorpvault"
 	"aegisproxy.io/aegis-proxy/internal/proxy"
 	"aegisproxy.io/aegis-proxy/internal/traces"
@@ -32,6 +33,10 @@ var policy string
 // vault specific flags
 var vaultAddr string
 
+// azure specific flags
+var azureTenantID string
+var azureClientID string
+
 var runCmd = &cobra.Command{
 	Use:   "run",
 	Short: "run the proxy server",
@@ -53,6 +58,9 @@ func init() {
 	// vault
 	runCmd.Flags().StringVarP(&vaultAddr, "vault-address", "a", "http://127.0.0.1:8200", "vault address")
 
+	// azure
+	runCmd.Flags().StringVarP(&azureTenantID, "azure-tenant-id", "", "", "azure tenant id")
+	runCmd.Flags().StringVarP(&azureClientID, "azure-client-id", "", "", "azure client id")
 	// token
 	runCmd.Flags().DurationVarP(&tokenGracePeriod, "token-grace-period", "g", 1*time.Minute, "token grace period")
 
@@ -101,6 +109,10 @@ func runProxy(cmd *cobra.Command, args []string) {
 		IdentityProviderType: identityProviderType,
 		VaultConfig: hashicorpvault.Config{
 			VaultAddr: vaultAddr,
+		},
+		AzureConfig: azure.Config{
+			TenantID: azureTenantID,
+			ClientID: azureClientID,
 		},
 		VersionInfo: proxy.VersionInfo{
 			Version:   Version,
