@@ -340,7 +340,7 @@ func (p *ProxyServer) ingressProxyHandler(w http.ResponseWriter, r *http.Request
 func (p *ProxyServer) validate(r *http.Request, claims map[string]interface{}) error {
 	// get Path
 
-	subject, ok := claims["name"].(string)
+	subject, ok := p.getSubject(claims)
 	if !ok {
 		return fmt.Errorf("subject not found")
 	}
@@ -360,6 +360,21 @@ func (p *ProxyServer) validate(r *http.Request, claims map[string]interface{}) e
 		}
 	}
 	return nil
+}
+
+func (p *ProxyServer) getSubject(claims map[string]interface{}) (string, bool) {
+
+	switch p.cfg.IdentityProviderType {
+	case hashicorpvault.Name:
+		return claims["name"].(string), true
+	case azure.Name:
+		roles := claims["roles"].([]interface{})
+		if len(roles) > 0 {
+			return roles[0].(string), true
+		}
+		return "", false
+	}
+	return "", false
 }
 
 func sliceContains(slice []string, item string) bool {
