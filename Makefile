@@ -1,7 +1,7 @@
 # Makefile
 
 # Variables
-IMAGE_NAME := aegisproxy
+IMAGE_NAME := aegis-proxy
 TAG := latest
 DOCKERFILE := Dockerfile
 BUILD_DIR := .

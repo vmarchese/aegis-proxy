@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"aegisproxy.io/aegis-proxy/internal/provider"
+	"aegisproxy.io/aegis-proxy/internal/provider/azure"
 	"aegisproxy.io/aegis-proxy/internal/provider/hashicorpvault"
 	"github.com/go-jose/go-jose/v4"
 	"github.com/go-jose/go-jose/v4/jwt"
@@ -59,6 +60,7 @@ type Config struct {
 	TokenGracePeriod     time.Duration
 
 	VaultConfig hashicorpvault.Config
+	AzureConfig azure.Config
 }
 
 type ProxyServer struct {
@@ -85,7 +87,7 @@ func New(ctx context.Context, cfg *Config) (*ProxyServer, error) {
 	p.outServer = &http.Server{Addr: fmt.Sprintf(":%s", p.cfg.OutPort), Handler: http.HandlerFunc(p.egressProxyHandler)}
 
 	if p.cfg.Type == IngressEgressProxy || p.cfg.Type == IngressProxy { // must read public keys
-		var keys *jose.JSONWebKeySet
+		var provider provider.Provider
 		switch p.cfg.IdentityProviderType {
 		case hashicorpvault.Name:
 			log.Trace().
@@ -93,15 +95,25 @@ func New(ctx context.Context, cfg *Config) (*ProxyServer, error) {
 				Strs("identityIn", p.cfg.IdentityIn).
 				Str("identityOut", p.cfg.IdentityOut).
 				Msg("getting public keys from hashicorp vault")
-			h := hashicorpvault.New(p.cfg.VaultConfig.VaultAddr, p.cfg.IdentityOut, "")
-			p.jwkKeys, err = h.GetPublicKeys(context.Background())
-			if err != nil {
-				log.Error().Err(err).Msg("failed to get public keys")
-				return nil, err
-			}
-			log.Trace().Interface("keys", keys).Msg("got public keys")
+			provider = hashicorpvault.New(p.cfg.VaultConfig.VaultAddr, p.cfg.IdentityOut, "")
 
+		case azure.Name:
+			log.Trace().
+				Str("tenant_id", p.cfg.AzureConfig.TenantID).
+				Strs("identityIn", p.cfg.IdentityIn).
+				Str("identityOut", p.cfg.IdentityOut).
+				Str("token_path", p.cfg.TokenPath).
+				Str("client_id", p.cfg.AzureConfig.ClientID).
+				Msg("getting public keys from azure")
+			provider = azure.New(p.cfg.AzureConfig.TenantID, p.cfg.AzureConfig.ClientID, p.cfg.TokenPath)
 		}
+
+		p.jwkKeys, err = provider.GetPublicKeys(context.Background())
+		if err != nil {
+			log.Error().Err(err).Msg("failed to get public keys")
+			return nil, err
+		}
+		log.Trace().Interface("keys", p.jwkKeys).Msg("got public keys")
 
 		if strings.TrimSpace(p.cfg.Policy) != "" {
 
@@ -361,21 +373,29 @@ func sliceContains(slice []string, item string) bool {
 
 func (p *ProxyServer) getToken() error {
 	if p.token == "" || provider.IsTokenExpired(p.token, p.cfg.TokenGracePeriod) {
+		var err error
 		log.Trace().Msg("token is expired or empty, getting new token")
-		token, err := os.ReadFile(p.cfg.TokenPath)
-		if err != nil {
-			log.Error().Err(err).Msg("failed to read token")
-			return err
-		}
 		var provider provider.Provider
 		switch p.cfg.IdentityProviderType {
 		case hashicorpvault.Name:
+			token, err := os.ReadFile(p.cfg.TokenPath)
+			if err != nil {
+				log.Error().Err(err).Msg("failed to read token")
+				return err
+			}
 			log.Trace().
 				Str("vault_addr", p.cfg.VaultConfig.VaultAddr).
 				Str("identity", p.cfg.IdentityOut).
 				Str("token", string(token)).
 				Msg("getting token from hashicorp vault")
 			provider = hashicorpvault.New(p.cfg.VaultConfig.VaultAddr, p.cfg.IdentityOut, string(token))
+		case azure.Name:
+			log.Trace().
+				Str("tenant_id", p.cfg.AzureConfig.TenantID).
+				Str("client_id", p.cfg.AzureConfig.ClientID).
+				Str("tokenpath", p.cfg.TokenPath).
+				Msg("getting token from azure")
+			provider = azure.New(p.cfg.AzureConfig.TenantID, p.cfg.AzureConfig.ClientID, p.cfg.TokenPath)
 		default:
 			log.Error().Str("type", p.cfg.IdentityProviderType).Msg("provider not known")
 			return fmt.Errorf("provider not known")
