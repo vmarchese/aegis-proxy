@@ -10,6 +10,7 @@ import (
 
 	"aegisproxy.io/aegis-proxy/internal/provider/azure"
 	"aegisproxy.io/aegis-proxy/internal/provider/hashicorpvault"
+	"aegisproxy.io/aegis-proxy/internal/provider/kubernetes"
 	"aegisproxy.io/aegis-proxy/internal/proxy"
 	"aegisproxy.io/aegis-proxy/internal/traces"
 	"github.com/google/uuid"
@@ -37,6 +38,9 @@ var vaultAddr string
 var azureTenantID string
 var azureClientID string
 
+// kubernetes specific flags
+var kubernetesIssuer string
+
 var runCmd = &cobra.Command{
 	Use:   "run",
 	Short: "run the proxy server",
@@ -61,6 +65,10 @@ func init() {
 	// azure
 	runCmd.Flags().StringVarP(&azureTenantID, "azure-tenant-id", "", "", "azure tenant id")
 	runCmd.Flags().StringVarP(&azureClientID, "azure-client-id", "", "", "azure client id")
+
+	// kubernetes
+	runCmd.Flags().StringVarP(&kubernetesIssuer, "kubernetes-issuer", "", "", "kubernetes issuer")
+
 	// token
 	runCmd.Flags().DurationVarP(&tokenGracePeriod, "token-grace-period", "g", 1*time.Minute, "token grace period")
 
@@ -113,6 +121,9 @@ func runProxy(cmd *cobra.Command, args []string) {
 		AzureConfig: azure.Config{
 			TenantID: azureTenantID,
 			ClientID: azureClientID,
+		},
+		KubernetesConfig: kubernetes.Config{
+			Issuer: kubernetesIssuer,
 		},
 		VersionInfo: proxy.VersionInfo{
 			Version:   Version,
