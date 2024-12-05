@@ -12,6 +12,7 @@ import (
 	"aegisproxy.io/aegis-proxy/internal/provider"
 	"aegisproxy.io/aegis-proxy/internal/provider/azure"
 	"aegisproxy.io/aegis-proxy/internal/provider/hashicorpvault"
+	"aegisproxy.io/aegis-proxy/internal/provider/kubernetes"
 	"github.com/go-jose/go-jose/v4"
 	"github.com/go-jose/go-jose/v4/jwt"
 	"github.com/rs/zerolog/log"
@@ -59,8 +60,9 @@ type Config struct {
 	VersionInfo          VersionInfo
 	TokenGracePeriod     time.Duration
 
-	VaultConfig hashicorpvault.Config
-	AzureConfig azure.Config
+	VaultConfig      hashicorpvault.Config
+	AzureConfig      azure.Config
+	KubernetesConfig kubernetes.Config
 }
 
 type ProxyServer struct {
@@ -106,6 +108,11 @@ func New(ctx context.Context, cfg *Config) (*ProxyServer, error) {
 				Str("client_id", p.cfg.AzureConfig.ClientID).
 				Msg("getting public keys from azure")
 			provider = azure.New(p.cfg.AzureConfig.TenantID, p.cfg.AzureConfig.ClientID, p.cfg.TokenPath)
+		case kubernetes.Name:
+			log.Trace().
+				Str("issuer", p.cfg.KubernetesConfig.Issuer).
+				Msg("getting public keys from kubernetes")
+			provider = kubernetes.New(p.cfg.KubernetesConfig.Issuer, p.cfg.TokenPath)
 		}
 
 		p.jwkKeys, err = provider.GetPublicKeys(context.Background())
@@ -365,6 +372,8 @@ func (p *ProxyServer) validate(r *http.Request, claims map[string]interface{}) e
 func (p *ProxyServer) getSubject(claims map[string]interface{}) (string, bool) {
 
 	switch p.cfg.IdentityProviderType {
+	case kubernetes.Name:
+		return claims["sub"].(string), true
 	case hashicorpvault.Name:
 		return claims["name"].(string), true
 	case azure.Name:
@@ -411,6 +420,12 @@ func (p *ProxyServer) getToken() error {
 				Str("tokenpath", p.cfg.TokenPath).
 				Msg("getting token from azure")
 			provider = azure.New(p.cfg.AzureConfig.TenantID, p.cfg.AzureConfig.ClientID, p.cfg.TokenPath)
+		case kubernetes.Name:
+			log.Trace().
+				Str("issuer", p.cfg.KubernetesConfig.Issuer).
+				Str("tokenpath", p.cfg.TokenPath).
+				Msg("getting token from kubernetes")
+			provider = kubernetes.New(p.cfg.KubernetesConfig.Issuer, p.cfg.TokenPath)
 		default:
 			log.Error().Str("type", p.cfg.IdentityProviderType).Msg("provider not known")
 			return fmt.Errorf("provider not known")
