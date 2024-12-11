@@ -8,6 +8,7 @@ import (
 	"syscall"
 	"time"
 
+	"aegisproxy.io/aegis-proxy/internal/provider/aws"
 	"aegisproxy.io/aegis-proxy/internal/provider/azure"
 	"aegisproxy.io/aegis-proxy/internal/provider/hashicorpvault"
 	"aegisproxy.io/aegis-proxy/internal/provider/kubernetes"
@@ -41,6 +42,10 @@ var azureClientID string
 // kubernetes specific flags
 var kubernetesIssuer string
 
+// aws specific flags
+var awsRegion string
+var awsIdentityID string
+
 var runCmd = &cobra.Command{
 	Use:   "run",
 	Short: "run the proxy server",
@@ -68,6 +73,10 @@ func init() {
 
 	// kubernetes
 	runCmd.Flags().StringVarP(&kubernetesIssuer, "kubernetes-issuer", "", "", "kubernetes issuer")
+
+	// aws
+	runCmd.Flags().StringVarP(&awsRegion, "aws-region", "", "", "aws region")
+	runCmd.Flags().StringVarP(&awsIdentityID, "aws-identity-id", "", "", "aws identity id")
 
 	// token
 	runCmd.Flags().DurationVarP(&tokenGracePeriod, "token-grace-period", "g", 1*time.Minute, "token grace period")
@@ -130,6 +139,10 @@ func runProxy(cmd *cobra.Command, args []string) {
 			GoVersion: GoVersion,
 			BuildUser: BuildUser,
 			BuildTime: BuildTime,
+		},
+		AWSConfig: aws.Config{
+			Region:     awsRegion,
+			IdentityID: awsIdentityID,
 		},
 	}
 	p, err := proxy.New(cmd.Context(), cfg)

@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"aegisproxy.io/aegis-proxy/internal/provider"
+	"aegisproxy.io/aegis-proxy/internal/provider/aws"
 	"aegisproxy.io/aegis-proxy/internal/provider/azure"
 	"aegisproxy.io/aegis-proxy/internal/provider/hashicorpvault"
 	"aegisproxy.io/aegis-proxy/internal/provider/kubernetes"
@@ -63,6 +64,7 @@ type Config struct {
 	VaultConfig      hashicorpvault.Config
 	AzureConfig      azure.Config
 	KubernetesConfig kubernetes.Config
+	AWSConfig        aws.Config
 }
 
 type ProxyServer struct {
@@ -113,6 +115,13 @@ func New(ctx context.Context, cfg *Config) (*ProxyServer, error) {
 				Str("issuer", p.cfg.KubernetesConfig.Issuer).
 				Msg("getting public keys from kubernetes")
 			provider = kubernetes.New(p.cfg.KubernetesConfig.Issuer, p.cfg.TokenPath)
+		case aws.Name:
+			log.Trace().
+				Str("region", p.cfg.AWSConfig.Region).
+				Str("identityID", p.cfg.AWSConfig.IdentityID).
+				Str("token_path", p.cfg.TokenPath).
+				Msg("getting public keys from aws")
+			provider = aws.New(p.cfg.AWSConfig.Region, p.cfg.AWSConfig.IdentityID, p.cfg.TokenPath)
 		}
 
 		p.jwkKeys, err = provider.GetPublicKeys(context.Background())
@@ -277,7 +286,7 @@ func (p *ProxyServer) ingressProxyHandler(w http.ResponseWriter, r *http.Request
 		Msg("received bearer token")
 
 	// Parse and validate JWT token
-	signatureAlgorithms := []jose.SignatureAlgorithm{jose.RS256} // Replace with actual supported algorithms
+	signatureAlgorithms := []jose.SignatureAlgorithm{jose.RS256, jose.RS512} // Replace with actual supported algorithms
 	token, err := jwt.ParseSigned(bearerToken, signatureAlgorithms)
 	if err != nil {
 		log.Error().Err(err).Msg("failed to parse JWT token")
@@ -382,6 +391,8 @@ func (p *ProxyServer) getSubject(claims map[string]interface{}) (string, bool) {
 			return roles[0].(string), true
 		}
 		return "", false
+	case aws.Name:
+		return awsIdentity(claims)
 	}
 	return "", false
 }
@@ -393,6 +404,21 @@ func sliceContains(slice []string, item string) bool {
 		}
 	}
 	return false
+}
+
+func awsIdentity(claims map[string]interface{}) (string, bool) {
+	amr := claims["amr"].([]interface{})
+	if len(amr) > 0 {
+		for _, amr := range amr {
+			if strings.HasPrefix(amr.(string), "arn:aws:iam:") {
+				parts := strings.Split(amr.(string), ":")
+				if len(parts) > 5 {
+					return strings.Join(parts[6:], ":"), true
+				}
+			}
+		}
+	}
+	return "", false
 }
 
 func (p *ProxyServer) getToken() error {
@@ -426,6 +452,13 @@ func (p *ProxyServer) getToken() error {
 				Str("tokenpath", p.cfg.TokenPath).
 				Msg("getting token from kubernetes")
 			provider = kubernetes.New(p.cfg.KubernetesConfig.Issuer, p.cfg.TokenPath)
+		case aws.Name:
+			log.Trace().
+				Str("region", p.cfg.AWSConfig.Region).
+				Str("identityID", p.cfg.AWSConfig.IdentityID).
+				Str("tokenpath", p.cfg.TokenPath).
+				Msg("getting token from aws")
+			provider = aws.New(p.cfg.AWSConfig.Region, p.cfg.AWSConfig.IdentityID, p.cfg.TokenPath)
 		default:
 			log.Error().Str("type", p.cfg.IdentityProviderType).Msg("provider not known")
 			return fmt.Errorf("provider not known")
