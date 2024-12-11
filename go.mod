@@ -12,7 +12,7 @@ require (
 	github.com/lestrrat-go/jwx/v3 v3.0.0-alpha1
 	github.com/rs/zerolog v1.33.0
 	github.com/spf13/cobra v1.8.1
-	github.com/vmarchese/aegis-operator v0.0.3
+	github.com/vmarchese/aegis-operator v0.0.4
 	go.opentelemetry.io/contrib/propagators/autoprop v0.57.0
 	go.opentelemetry.io/otel v1.32.0
 	go.opentelemetry.io/otel/exporters/otlp/otlptrace v1.32.0
