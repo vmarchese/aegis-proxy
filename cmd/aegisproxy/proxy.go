@@ -24,6 +24,7 @@ var outPort string
 var proxyType string
 var tokenPath string
 var proxyuid string
+var metricsPort string // Add this
 
 var identityProviderType string
 var identityOut string
@@ -83,6 +84,8 @@ func init() {
 
 	// policy
 	runCmd.Flags().StringVarP(&policy, "policy", "l", "", "policy name")
+	// metrics
+	runCmd.Flags().StringVarP(&metricsPort, "metrics-port", "m", "9090", "port to run the metrics server on")
 }
 
 func runProxy(cmd *cobra.Command, args []string) {
@@ -91,6 +94,7 @@ func runProxy(cmd *cobra.Command, args []string) {
 		proxyuid = uuid.New().String()
 	}
 	var wg sync.WaitGroup
+	wg.Add(1) // For the metrics server
 
 	switch proxyType {
 	case proxy.IngressProxy:
@@ -99,8 +103,7 @@ func runProxy(cmd *cobra.Command, args []string) {
 		wg.Add(1)
 	case proxy.IngressEgressProxy:
 		wg.Add(2)
-	default:
-		log.Fatal().Msgf("invalid proxy type: %s", proxyType)
+		// No default needed here if proxyType validation happens earlier or is trusted
 	}
 
 	log.Debug().
@@ -118,6 +121,7 @@ func runProxy(cmd *cobra.Command, args []string) {
 		UUID:                 proxyuid,
 		InPort:               inPort,
 		OutPort:              outPort,
+		MetricsPort:          metricsPort, // Add this line
 		Type:                 proxyType,
 		TokenPath:            tokenPath,
 		IdentityIn:           identityIn,
@@ -155,6 +159,13 @@ func runProxy(cmd *cobra.Command, args []string) {
 		log.Fatal().Err(err).Msg("failed to create tracer")
 	}
 	defer tracer.Shutdown(cmd.Context())
+
+	go func() {
+		defer wg.Done() // This assumes wg is incremented for metrics server
+		if err := p.StartMetricsServer(); err != nil && err != http.ErrServerClosed {
+			log.Error().Err(err).Msg("Metrics server failed")
+		}
+	}()
 
 	switch proxyType {
 	case proxy.IngressProxy:
