@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"aegisproxy.io/aegis-proxy/internal/metrics"
 	"aegisproxy.io/aegis-proxy/internal/provider"
 	"aegisproxy.io/aegis-proxy/internal/provider/aws"
 	"aegisproxy.io/aegis-proxy/internal/provider/azure"
@@ -60,6 +61,8 @@ type Config struct {
 	Policy               string
 	VersionInfo          VersionInfo
 	TokenGracePeriod     time.Duration
+	MetricsPort          string
+	EnableMetrics        bool
 
 	VaultConfig      hashicorpvault.Config
 	AzureConfig      azure.Config
@@ -70,8 +73,9 @@ type Config struct {
 type ProxyServer struct {
 	cfg *Config
 
-	inServer  *http.Server
-	outServer *http.Server
+	inServer     *http.Server
+	outServer    *http.Server
+	metricsServer *http.Server
 
 	token   string
 	jwkKeys *jose.JSONWebKeySet
@@ -80,6 +84,8 @@ type ProxyServer struct {
 	dynamicClient *dynamic.DynamicClient
 	watcher       watch.Interface
 	namespace     string
+
+	metricsProvider *metrics.Provider
 }
 
 func New(ctx context.Context, cfg *Config) (*ProxyServer, error) {
@@ -87,6 +93,28 @@ func New(ctx context.Context, cfg *Config) (*ProxyServer, error) {
 	p := &ProxyServer{
 		cfg: cfg,
 	}
+	
+	// Initialize metrics if enabled
+	if cfg.EnableMetrics {
+		p.metricsProvider, err = metrics.New(ctx)
+		if err != nil {
+			log.Error().Err(err).Msg("failed to create metrics provider")
+			return nil, err
+		}
+		
+		// Create metrics server
+		mux := http.NewServeMux()
+		mux.Handle("/metrics", p.metricsProvider.GetMetricsHandler())
+		mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusOK)
+			w.Write([]byte("OK"))
+		})
+		p.metricsServer = &http.Server{
+			Addr:    fmt.Sprintf(":%s", cfg.MetricsPort),
+			Handler: mux,
+		}
+	}
+	
 	p.inServer = &http.Server{Addr: fmt.Sprintf(":%s", p.cfg.InPort), Handler: http.HandlerFunc(p.ingressProxyHandler)}
 	p.outServer = &http.Server{Addr: fmt.Sprintf(":%s", p.cfg.OutPort), Handler: http.HandlerFunc(p.egressProxyHandler)}
 
@@ -180,19 +208,53 @@ func (p *ProxyServer) StartInServer() error {
 	log.Info().Str("inPort", p.cfg.InPort).Msg("Starting ingress proxy server")
 	return p.inServer.ListenAndServe()
 }
+
 func (p *ProxyServer) StartOutServer() error {
 	log.Info().Str("outPort", p.cfg.OutPort).Msg("Starting egress proxy server")
 	return p.outServer.ListenAndServe()
 }
 
+func (p *ProxyServer) StartMetricsServer() error {
+	if p.metricsServer == nil {
+		return fmt.Errorf("metrics server not initialized")
+	}
+	log.Info().Str("metricsPort", p.cfg.MetricsPort).Msg("Starting metrics server")
+	return p.metricsServer.ListenAndServe()
+}
+
 func (p *ProxyServer) Shutdown(ctx context.Context) error {
-	p.inServer.Shutdown(ctx)
-	p.outServer.Shutdown(ctx)
-	p.watcher.Stop()
+	if p.inServer != nil {
+		p.inServer.Shutdown(ctx)
+	}
+	if p.outServer != nil {
+		p.outServer.Shutdown(ctx)
+	}
+	if p.metricsServer != nil {
+		p.metricsServer.Shutdown(ctx)
+	}
+	if p.watcher != nil {
+		p.watcher.Stop()
+	}
+	if p.metricsProvider != nil {
+		p.metricsProvider.Shutdown(ctx)
+	}
 	return nil
 }
 
 func (p *ProxyServer) egressProxyHandler(w http.ResponseWriter, r *http.Request) {
+	startTime := time.Now()
+	proxyType := "egress"
+	
+	// Track active connections
+	updateActiveConnections(proxyType, 1, p.metricsProvider)
+	defer updateActiveConnections(proxyType, -1, p.metricsProvider)
+	
+	// Wrap response writer to capture status code
+	rw := &responseWriter{ResponseWriter: w, statusCode: 200}
+	defer func() {
+		recordMetrics(proxyType, r.Method, startTime, rw.statusCode, p.metricsProvider)
+	}()
+	
 	ctx := otel.GetTextMapPropagator().Extract(r.Context(), propagation.HeaderCarrier(r.Header))
 	ctx, span := tracer.Start(ctx, fmt.Sprintf("%s-egress", p.cfg.IdentityOut),
 		trace.WithSpanKind(trace.SpanKindServer),
@@ -219,7 +281,8 @@ func (p *ProxyServer) egressProxyHandler(w http.ResponseWriter, r *http.Request)
 	if err != nil {
 		span.SetStatus(codes.Error, err.Error())
 		span.RecordError(err)
-		http.Error(w, "failed to read token", http.StatusInternalServerError)
+		rw.statusCode = http.StatusInternalServerError
+		http.Error(rw, "failed to read token", http.StatusInternalServerError)
 		return
 	}
 	log.Trace().Str("bearer", p.token).Str("identityOut", p.cfg.IdentityOut).Msg("got bearer")
@@ -237,10 +300,22 @@ func (p *ProxyServer) egressProxyHandler(w http.ResponseWriter, r *http.Request)
 			target.Header.Add("X-Aegis-Proxy-ID", fmt.Sprintf("%s-%s", p.cfg.Type, p.cfg.UUID))
 		},
 	}
-	proxy.ServeHTTP(w, r)
+	proxy.ServeHTTP(rw, r)
 }
 
 func (p *ProxyServer) ingressProxyHandler(w http.ResponseWriter, r *http.Request) {
+	startTime := time.Now()
+	proxyType := "ingress"
+	
+	// Track active connections
+	updateActiveConnections(proxyType, 1, p.metricsProvider)
+	defer updateActiveConnections(proxyType, -1, p.metricsProvider)
+	
+	// Wrap response writer to capture status code
+	rw := &responseWriter{ResponseWriter: w, statusCode: 200}
+	defer func() {
+		recordMetrics(proxyType, r.Method, startTime, rw.statusCode, p.metricsProvider)
+	}()
 
 	ctx := otel.GetTextMapPropagator().Extract(r.Context(), propagation.HeaderCarrier(r.Header))
 	ctx, span := tracer.Start(ctx, "ingress", trace.WithSpanKind(trace.SpanKindServer))
@@ -264,7 +339,9 @@ func (p *ProxyServer) ingressProxyHandler(w http.ResponseWriter, r *http.Request
 	authHeader := r.Header.Get("Authorization")
 	if authHeader == "" {
 		log.Error().Msg("missing Authorization header")
-		http.Error(w, "missing Authorization header", http.StatusUnauthorized)
+		recordAuthFailure(proxyType, "missing_authorization_header", p.metricsProvider)
+		rw.statusCode = http.StatusUnauthorized
+		http.Error(rw, "missing Authorization header", http.StatusUnauthorized)
 		span.SetStatus(codes.Error, "missing Authorization header")
 		span.RecordError(fmt.Errorf("missing Authorization header"))
 		return
@@ -273,7 +350,9 @@ func (p *ProxyServer) ingressProxyHandler(w http.ResponseWriter, r *http.Request
 	parts := strings.Split(authHeader, " ")
 	if len(parts) != 2 || parts[0] != "Bearer" {
 		log.Error().Msg("invalid Authorization header format")
-		http.Error(w, "invalid Authorization header format", http.StatusUnauthorized)
+		recordAuthFailure(proxyType, "invalid_authorization_format", p.metricsProvider)
+		rw.statusCode = http.StatusUnauthorized
+		http.Error(rw, "invalid Authorization header format", http.StatusUnauthorized)
 		span.SetStatus(codes.Error, "invalid Authorization header format")
 		span.RecordError(fmt.Errorf("invalid Authorization header format"))
 		return
@@ -290,7 +369,9 @@ func (p *ProxyServer) ingressProxyHandler(w http.ResponseWriter, r *http.Request
 	token, err := jwt.ParseSigned(bearerToken, signatureAlgorithms)
 	if err != nil {
 		log.Error().Err(err).Msg("failed to parse JWT token")
-		http.Error(w, "invalid token format", http.StatusUnauthorized)
+		recordAuthFailure(proxyType, "invalid_token_format", p.metricsProvider)
+		rw.statusCode = http.StatusUnauthorized
+		http.Error(rw, "invalid token format", http.StatusUnauthorized)
 		span.SetStatus(codes.Error, err.Error())
 		span.RecordError(err)
 		return
@@ -300,7 +381,9 @@ func (p *ProxyServer) ingressProxyHandler(w http.ResponseWriter, r *http.Request
 	kid := token.Headers[0].KeyID
 	if p.jwkKeys.Key(kid) == nil {
 		log.Error().Str("keyID", kid).Msg("key not found")
-		http.Error(w, "key not found", http.StatusUnauthorized)
+		recordAuthFailure(proxyType, "key_not_found", p.metricsProvider)
+		rw.statusCode = http.StatusUnauthorized
+		http.Error(rw, "key not found", http.StatusUnauthorized)
 		span.SetStatus(codes.Error, "key not found")
 		span.RecordError(fmt.Errorf("key not found"))
 		return
@@ -317,7 +400,9 @@ func (p *ProxyServer) ingressProxyHandler(w http.ResponseWriter, r *http.Request
 	err = token.Claims(&key, &claims)
 	if err != nil {
 		log.Error().Err(err).Msg("failed to validate token")
-		http.Error(w, "invalid token signature", http.StatusUnauthorized)
+		recordAuthFailure(proxyType, "invalid_token_signature", p.metricsProvider)
+		rw.statusCode = http.StatusUnauthorized
+		http.Error(rw, "invalid token signature", http.StatusUnauthorized)
 		span.RecordError(err)
 		return
 	}
@@ -330,7 +415,9 @@ func (p *ProxyServer) ingressProxyHandler(w http.ResponseWriter, r *http.Request
 		log.Trace().Interface("policy", p.ingressPolicy).Msg("policy to be checked")
 		if err := p.validate(r, claims); err != nil {
 			log.Error().Err(err).Str("policy", p.ingressPolicy.Name).Msg("policy blocked access")
-			http.Error(w, fmt.Sprintf("access blocked by ingress policy: %s", err.Error()), http.StatusUnauthorized)
+			recordPolicyFailure(proxyType, p.ingressPolicy.Name, p.metricsProvider)
+			rw.statusCode = http.StatusUnauthorized
+			http.Error(rw, fmt.Sprintf("access blocked by ingress policy: %s", err.Error()), http.StatusUnauthorized)
 			span.SetStatus(codes.Error, err.Error())
 			span.RecordError(err)
 			return
@@ -350,7 +437,7 @@ func (p *ProxyServer) ingressProxyHandler(w http.ResponseWriter, r *http.Request
 			target.Header.Add("X-Aegis-Proxy-ID", fmt.Sprintf("%s-%s", p.cfg.Type, p.cfg.UUID))
 		},
 	}
-	proxy.ServeHTTP(w, r)
+	proxy.ServeHTTP(rw, r)
 }
 
 func (p *ProxyServer) validate(r *http.Request, claims map[string]interface{}) error {
