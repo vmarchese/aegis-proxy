@@ -105,18 +105,29 @@ func New(ctx context.Context, cfg *Config) (*ProxyServer, error) {
 		// Create metrics server
 		mux := http.NewServeMux()
 		mux.Handle("/metrics", p.metricsProvider.GetMetricsHandler())
-		mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
-			w.WriteHeader(http.StatusOK)
-			w.Write([]byte("OK"))
-		})
 		p.metricsServer = &http.Server{
 			Addr:    fmt.Sprintf(":%s", cfg.MetricsPort),
 			Handler: mux,
 		}
 	}
 	
-	p.inServer = &http.Server{Addr: fmt.Sprintf(":%s", p.cfg.InPort), Handler: http.HandlerFunc(p.ingressProxyHandler)}
-	p.outServer = &http.Server{Addr: fmt.Sprintf(":%s", p.cfg.OutPort), Handler: http.HandlerFunc(p.egressProxyHandler)}
+	// Create muxes for ingress and egress servers with health endpoints
+	inMux := http.NewServeMux()
+	inMux.HandleFunc("/", p.ingressProxyHandler)
+	inMux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte("OK"))
+	})
+	
+	outMux := http.NewServeMux()
+	outMux.HandleFunc("/", p.egressProxyHandler)
+	outMux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte("OK"))
+	})
+	
+	p.inServer = &http.Server{Addr: fmt.Sprintf(":%s", p.cfg.InPort), Handler: inMux}
+	p.outServer = &http.Server{Addr: fmt.Sprintf(":%s", p.cfg.OutPort), Handler: outMux}
 
 	if p.cfg.Type == IngressEgressProxy || p.cfg.Type == IngressProxy { // must read public keys
 		var provider provider.Provider
