@@ -32,6 +32,10 @@ var tokenGracePeriod time.Duration
 
 var policy string
 
+// metrics specific flags
+var metricsPort string
+var enableMetrics bool
+
 // vault specific flags
 var vaultAddr string
 
@@ -64,6 +68,10 @@ func init() {
 	runCmd.Flags().StringSliceVar(&identityIn, "identity-allowed", []string{}, "identity allowed name")
 	runCmd.Flags().StringVarP(&identityProviderType, "identity-provider", "p", hashicorpvault.Name, "identity provider type")
 
+	// metrics
+	runCmd.Flags().BoolVarP(&enableMetrics, "enable-metrics", "m", false, "enable metrics collection and endpoint")
+	runCmd.Flags().StringVarP(&metricsPort, "metrics-port", "", "9090", "port for metrics endpoint")
+
 	// vault
 	runCmd.Flags().StringVarP(&vaultAddr, "vault-address", "a", "http://127.0.0.1:8200", "vault address")
 
@@ -95,10 +103,19 @@ func runProxy(cmd *cobra.Command, args []string) {
 	switch proxyType {
 	case proxy.IngressProxy:
 		wg.Add(1)
+		if enableMetrics {
+			wg.Add(1)
+		}
 	case proxy.EgressProxy:
 		wg.Add(1)
+		if enableMetrics {
+			wg.Add(1)
+		}
 	case proxy.IngressEgressProxy:
 		wg.Add(2)
+		if enableMetrics {
+			wg.Add(1)
+		}
 	default:
 		log.Fatal().Msgf("invalid proxy type: %s", proxyType)
 	}
@@ -124,6 +141,8 @@ func runProxy(cmd *cobra.Command, args []string) {
 		IdentityOut:          identityOut,
 		Policy:               policy,
 		IdentityProviderType: identityProviderType,
+		EnableMetrics:        enableMetrics,
+		MetricsPort:          metricsPort,
 		VaultConfig: hashicorpvault.Config{
 			VaultAddr: vaultAddr,
 		},
@@ -163,12 +182,24 @@ func runProxy(cmd *cobra.Command, args []string) {
 			defer wg.Done()
 			p.StartInServer()
 		}()
+		if enableMetrics {
+			go func() {
+				defer wg.Done()
+				p.StartMetricsServer()
+			}()
+		}
 	case proxy.EgressProxy:
 		log.Info().Str("outPort", outPort).Msg("Starting egress proxy server")
 		go func() {
 			defer wg.Done()
 			p.StartOutServer()
 		}()
+		if enableMetrics {
+			go func() {
+				defer wg.Done()
+				p.StartMetricsServer()
+			}()
+		}
 	case proxy.IngressEgressProxy:
 		log.Info().Str("inPort", inPort).Str("outPort", outPort).Msg("Starting ingress-egress proxy server")
 		go func() {
@@ -179,6 +210,12 @@ func runProxy(cmd *cobra.Command, args []string) {
 			defer wg.Done()
 			p.StartOutServer()
 		}()
+		if enableMetrics {
+			go func() {
+				defer wg.Done()
+				p.StartMetricsServer()
+			}()
+		}
 	}
 
 	sigChan := make(chan os.Signal, 1)
